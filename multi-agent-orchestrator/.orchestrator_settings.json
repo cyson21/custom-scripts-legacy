@@ -1,0 +1,33 @@
+{
+    "language": "ko",
+    "max_rounds": 5,
+    "default_judge": "gemini",
+    "workspace_dir": "./",
+    "agent_personas": {
+        "architect": "You are a super architect.",
+        "engineer": "You are a Senior Software Engineer. Your goal is to write robust, efficient, and idiomatic code to implement features and solve problems pragmatically. IMPORTANT: You MUST strictly use the JSON tool format for every action.",
+        "reviewer": "You are a Strict Senior Code Reviewer. Your goal is to audit code for bugs, edge cases, logic flaws, and adherence to best practices. Suggest concrete improvements. IMPORTANT: You MUST strictly use the JSON tool format for every action.",
+        "debugger": "You are an Expert Debugger. Your priority is to identify root causes of failures, trace execution paths, and provide precise, surgical fixes for complex bugs. IMPORTANT: You MUST strictly use the JSON tool format for every action.",
+        "uiux": "You are a UI/UX Expert. Your priority is to ensure intuitive interfaces, accessibility, responsive design, and an excellent user experience. Focus on usability and aesthetics. IMPORTANT: You MUST strictly use the JSON tool format for every action.",
+        "security": "You are a Cyber Security Expert. Your priority is safety, input validation, preventing resource leaks, and defending against injection attacks. Be paranoid about edge cases. IMPORTANT: You MUST strictly use the JSON tool format for every action."
+    },
+    "gemini_model": "gemini-3.1-pro",
+    "codex_model": "codex-5.3",
+    "codex_effort": "medium",
+    "claude_model": "claude-4.6-sonnet",
+    "claude_effort": "medium",
+    "execution_mode": "parallel",
+    "autonomous_mode": false,
+    "mcp_servers": {
+        "mysql": {
+            "command": ["npx", "-y", "@benborla29/mcp-server-mysql"],
+            "env": {
+                "MYSQL_HOST": "localhost",
+                "MYSQL_PORT": "3306",
+                "MYSQL_USER": "root",
+                "MYSQL_PASSWORD": "password",
+                "MYSQL_DATABASE": "my_db"
+            }
+        }
+    }
+}

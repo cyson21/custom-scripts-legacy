@@ -1,0 +1,151 @@
+import asyncio
+import time
+import random
+from typing import Callable, Awaitable, Tuple, Any
+from pathlib import Path
+
+from orchestrator.context import OrchestrationContext
+from orchestrator.io_provider import AgentIOProvider
+
+# Add TUI imports if available
+try:
+    from orchestrator.core.state import OrchestratorState, AgentStatus
+except ImportError:
+    OrchestratorState = Any
+    AgentStatus = Any
+
+class MaxRetriesExceededError(Exception):
+    """Raised when the Sisyphus loop exceeds the maximum number of retries."""
+    pass
+
+class SisyphusLoop:
+    """
+    The Recursive Orchestrator (The "Sisyphus" Loop).
+    Acts as a Project Manager that delegates tasks and verifies results.
+    Includes Exponential Backoff for system/infrastructure errors.
+    """
+    def __init__(self, max_retries: int = 3, backoff_factor: float = 1.5):
+        self.max_retries = max_retries
+        self.backoff_factor = backoff_factor
+
+    async def delegate_task(
+        self, 
+        io_provider: AgentIOProvider, 
+        prompt: str, 
+        target_path: Path, 
+        title: str
+    ) -> str:
+        """Delegate a task to an agent with system-level retry logic."""
+        system_retries = 3
+        last_exception = None
+        
+        for i in range(system_retries):
+            try:
+                return await io_provider.ask(prompt, target_path, title)
+            except Exception as e:
+                last_exception = e
+                wait = (self.backoff_factor ** i) + (random.random() * 0.1)
+                await asyncio.sleep(wait)
+        
+        raise last_exception
+
+    async def verify_result(
+        self, 
+        result: str, 
+        verification_fn: Callable[[str], Awaitable[Tuple[bool, str]]]
+    ) -> Tuple[bool, str]:
+        """
+        Verify the result using a provided verification function.
+        """
+        try:
+            return await verification_fn(result)
+        except Exception as e:
+            # System error during verification
+            return False, f"SYSTEM_ERROR: Verification engine crashed: {str(e)}"
+
+    async def run(
+        self, 
+        context: OrchestrationContext, 
+        io_provider: AgentIOProvider, 
+        task_prompt: str,
+        verification_fn: Callable[[str], Awaitable[Tuple[bool, str]]],
+        title: str = "Sisyphus Task",
+        state_manager: OrchestratorState = None
+    ) -> str:
+        """
+        Run the recursive Sisyphus loop for a given task.
+        """
+        agent_name = getattr(io_provider, "agent_name", "agent")
+        if state_manager:
+            state_manager.register_agent(agent_name, max_retries=self.max_retries)
+
+        current_prompt = task_prompt
+        last_result = ""
+        last_error = ""
+
+        for attempt in range(1, self.max_retries + 1):
+            if state_manager:
+                state_manager.update_agent_status(agent_name, AgentStatus.THINKING, action="Thinking...", attempt=attempt)
+
+            target_path = context.artifact_dir / f"sisyphus_attempt_{attempt}.txt"
+            loop_title = f"{title} (Attempt {attempt}/{self.max_retries})"
+            
+            # 1. Delegate task (Execution)
+            try:
+                last_result = await self.delegate_task(io_provider, current_prompt, target_path, loop_title)
+            except Exception as e:
+                last_error = f"FATAL SYSTEM ERROR: {str(e)}"
+                break # Hard fail on persistent system error
+            
+            if state_manager:
+                state_manager.update_agent_status(agent_name, AgentStatus.VERIFYING, action="Verifying result...")
+
+            # 2. Verify result (Quality Gate)
+            is_success, error_msg = await self.verify_result(last_result, verification_fn)
+            
+            # Record trace (Thread-safe)
+            async with context.lock:
+                trace_entry = {
+                    "attempt": attempt,
+                    "prompt": current_prompt,
+                    "action": last_result,
+                    "observation": "Success" if is_success else error_msg,
+                    "hint": "",
+                    "success": is_success
+                }
+                if not is_success and "Hint" in error_msg:
+                    parts = error_msg.split("💡 Hint")
+                    if len(parts) > 1:
+                        trace_entry["hint"] = "💡 Hint" + parts[1]
+                context.execution_trace.append(trace_entry)
+            
+            if is_success:
+                if state_manager:
+                    state_manager.update_agent_status(agent_name, AgentStatus.SUCCESS, action="Task Completed!")
+                return last_result
+            
+            if state_manager:
+                state_manager.update_agent_status(agent_name, AgentStatus.FAILURE, action=f"Failed: {error_msg[:50]}...")
+
+            # 3. Handle failure & Feedback (Recursive Loop Setup)
+            last_error = error_msg
+            
+            # Determine if this was a hard failure or a "proceed" instruction
+            is_partial_success = "successfully updated" in error_msg.lower() or "proceed" in error_msg.lower()
+            
+            status_header = "--- PROGRESS REPORT ---" if is_partial_success else "--- PREVIOUS ATTEMPT FAILED ---"
+            instruction_text = "Please continue with the next step:" if is_partial_success else "Please fix the following errors and try again:"
+            label = "FEEDBACK" if is_partial_success else "VERIFICATION ERROR"
+
+            current_prompt = (
+                f"{task_prompt}\n\n"
+                f"{status_header}\n"
+                f"{instruction_text}\n\n"
+                f"{label}:\n{error_msg}\n\n"
+                f"YOUR PREVIOUS RESULT:\n{last_result}\n"
+            )
+
+        raise MaxRetriesExceededError(
+            f"Graceful degradation: Sisyphus Loop '{title}' failed after {self.max_retries} attempts.\n"
+            f"Last verification error: {last_error}"
+        )
